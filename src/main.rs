@@ -162,22 +162,29 @@ fn ecb_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 /// You will need to generate a random initialization vector (IV) to encrypt the
 /// very first block because it doesn't have a previous block. Typically this IV
 /// is inserted as the first block of ciphertext.
+fn xor(block1: [u8; BLOCK_SIZE], block2: [u8; BLOCK_SIZE]) -> [u8; BLOCK_SIZE] {
+    let mut result: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+    for i in 0..BLOCK_SIZE {
+        result[i] = block1[i] ^ block2[i];
+    }
+    result
+}
+
 fn cbc_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
     // Remember to generate a random initialization vector for the first block.
-
-    let padded_text = pad(plain_text);
-    let blocks = group(padded_text);
 
     let mut rng = rand::thread_rng();
     let mut iv: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
     rng.fill(&mut iv);
 
-    // encrypt the iv with the key
-    let mut previous_ciphertext_block = aes_encrypt(iv, &key);
+    let padded_text = pad(plain_text);
+    let blocks = group(padded_text);
 
+    let mut previous_ciphertext_block = iv; // first key is just the IV
     let mut encrypted_blocks: Vec<[u8; BLOCK_SIZE]> = Vec::new();
     for block in blocks.iter() {
-        previous_ciphertext_block = aes_encrypt(*block, &previous_ciphertext_block);
+        let xor_block: [u8; BLOCK_SIZE] = xor(*block, previous_ciphertext_block);
+        previous_ciphertext_block = aes_encrypt(xor_block, &key);
         encrypted_blocks.push(previous_ciphertext_block);
     }
 
@@ -193,16 +200,17 @@ fn cbc_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
     // Extract the IV from the first block of the ciphertext
     let iv: Vec<u8> = cipher_text[0..BLOCK_SIZE].to_vec();
     let iv: [u8; BLOCK_SIZE] = iv.try_into().expect("Wrong IV length");
-    let mut previous_ciphertext_block = aes_encrypt(iv, &key);
+    let mut previous_ciphertext_block = iv;
 
     let blocks = group(cipher_text);
 
     // Decrypt each block
     let mut decrypted_blocks: Vec<[u8; BLOCK_SIZE]> = Vec::new();
     for block in blocks[1..].iter() {
-        let decrypted_block = aes_decrypt(*block, &previous_ciphertext_block);
+        let decrypted_block = aes_decrypt(*block, &key);
+        let xor_block = xor(decrypted_block, previous_ciphertext_block);
         previous_ciphertext_block = *block;
-        decrypted_blocks.push(decrypted_block);
+        decrypted_blocks.push(xor_block);
     }
 
     unpad(ungroup(decrypted_blocks))
@@ -242,7 +250,7 @@ fn ctr_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
         v[BLOCK_SIZE / 2..].copy_from_slice(&(i as u64).to_ne_bytes());
 
         let block_v = aes_encrypt(v, &key);
-        encrypted_blocks.push(aes_encrypt(*block, &block_v));
+        encrypted_blocks.push(xor(*block, block_v));
     }
 
     let mut ciphertext = ungroup(encrypted_blocks);
@@ -267,7 +275,7 @@ fn ctr_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
         v[BLOCK_SIZE / 2..].copy_from_slice(&(i as u64).to_ne_bytes());
 
         let block_v = aes_encrypt(v, &key);
-        decrypted_blocks.push(aes_decrypt(*block, &block_v));
+        decrypted_blocks.push(xor(*block, block_v));
     }
 
     unpad(ungroup(decrypted_blocks))
